@@ -151,8 +151,8 @@ int run(char* compression, int pc, char* pv[]) {
   }
 
   // compact & dump
-  td_compact(td);
-  td_dump(td);
+  //td_compact(td);
+  //td_dump(td);
 
   for (int i = 0; i < pc; i++) {
     double p = percentiles[i];

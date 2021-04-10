@@ -6,8 +6,6 @@
 
 #include <stdio.h>
 
-#define MATH_PI 3.1415926535897932384626433
-
 // The design of the t-digest implementation is constrained
 // primarily by the speed at which new points can be added to the
 // structure, and how quickly a compaction can be performed.
@@ -135,10 +133,18 @@ static bool td_needs_compacting(tdigest* td) {
   return td_next(td) >= td->capacity;
 }
 
+static bool _very_small(double val) {
+  return -1e-15f < val && val < 1e-15f;
+}
+
 static int centroid_compare(const void* v1, const void* v2) {
   const centroid* c1 = (const centroid*)v1;
   const centroid* c2 = (const centroid*)v2;
-  return c1->mean - c2->mean;
+  double delta = c1->mean - c2->mean;
+  if (!_very_small(delta)) {
+    return delta;
+  }
+  return c1->count - c2->count;
 }
 
 void td_compact(tdigest* td) {
@@ -156,9 +162,12 @@ void td_compact(tdigest* td) {
 
   const double total_weight = td->point_count;
   const double compression = td_compression(td);
-  const double normalizer = compression / (4 * log(total_weight / compression) + 24);
+  const double Z = 4 * log(total_weight / compression) + 21;
+  const double normalizer =
+    //compression / (4 * log(total_weight / compression) + 24);
+    compression / Z;
 
-  double cumulative_sum = td->centroids[0].count;
+  double cumulative_sum = 0;
   uint32_t output = 0;
   for (uint32_t i = 1; i < length; i++) {
     if (output == i) {
@@ -169,9 +178,11 @@ void td_compact(tdigest* td) {
     double projected_sum = cumulative_sum + proposed_count;
     double q0 = cumulative_sum / total_weight;
     double q2 = projected_sum / total_weight;
-    bool combine = proposed_count <= (total_weight * min(q0 *(1 - q0), q2 *(1 - q2)) / normalizer);
 
-    if (combine) {
+    //double bound = (total_weight * min(q0 *(1 - q0), q2 *(1 - q2)) / normalizer);
+    double bound = total_weight * Z * min(min(q0,1 - q0), min(q2, 1 - q2)) / compression;
+
+    if (proposed_count <= bound) {
       td->centroids[output] = weighted_mean(td->centroids[output], td->centroids[i]);
     } else {
       cumulative_sum += td->centroids[output].count;

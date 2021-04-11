@@ -4,6 +4,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include <stdio.h>
+
 struct tdigest_t;
 typedef struct tdigest_t tdigest;
 
@@ -22,5 +24,8 @@ uint64_t td_count(tdigest* td);
 
 // Returns the percentile.
 double td_percentile(tdigest* td, double percentile);
+
+// Dump a readable version of the tdigest out, compacts if necessary.
+void td_dump(tdigest* td, FILE* out);
 
 #endif /* __T_DIGEST_H__ */

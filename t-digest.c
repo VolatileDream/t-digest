@@ -24,6 +24,8 @@ struct tdigest_t {
   uint32_t compacted_count; // number of compacted nodes, prefix of centroids.
   uint32_t uncompacted_count; // number of uncompacted nodes, suffix of centroids.
 
+  uint32_t compaction_counter; // number of compactions done
+
   double min;
   double max;
   uint64_t point_count;
@@ -65,7 +67,7 @@ static centroid weighted_mean(centroid c1, centroid c2) {
 }
 
 static uint32_t td_compression(tdigest* td) {
-  return td->capacity >> 3;
+  return td->capacity >> 4;
 }
 
 bool td_add(tdigest* td, double value) {
@@ -73,13 +75,13 @@ bool td_add(tdigest* td, double value) {
 }
 
 bool td_alloc(uint32_t compression, tdigest** outptr) {
-  uint32_t nodes = compression << 3; 
+  uint32_t nodes = compression << 4;
   tdigest* ptr = malloc(sizeof(tdigest) + sizeof(centroid) * (nodes + 1));
   if (!ptr) {
     return false;
   }
 
-  memset(ptr, 0, sizeof(tdigest) + sizeof(centroid) * nodes);
+  memset(ptr, 0, sizeof(tdigest) + sizeof(centroid) * (nodes + 1));
 
   ptr->capacity = nodes;
   ptr->max = -INFINITY;
@@ -96,7 +98,7 @@ bool td_free(tdigest* ptr) {
   return true;
 }
 
-uint32_t td_next(tdigest* td) {
+static uint32_t td_next(tdigest* td) {
   return td->compacted_count + td->uncompacted_count;
 }
 
@@ -134,6 +136,7 @@ static bool td_needs_compacting(tdigest* td) {
 }
 
 static bool _very_small(double val) {
+  // Return true for subnormal floating point values
   return -1e-15f < val && val < 1e-15f;
 }
 
@@ -142,9 +145,18 @@ static int centroid_compare(const void* v1, const void* v2) {
   const centroid* c2 = (const centroid*)v2;
   double delta = c1->mean - c2->mean;
   if (!_very_small(delta)) {
-    return delta;
+    if (delta < 0) {
+      return -1;
+    } else if (0 < delta) {
+      return 1;
+    }
+    return 0;
   }
   return c1->count - c2->count;
+}
+
+static int centroid_compare_reverse(const void* v1, const void* v2) {
+  return -centroid_compare(v1, v2);
 }
 
 void td_compact(tdigest* td) {
@@ -154,18 +166,27 @@ void td_compact(tdigest* td) {
 
   const uint32_t length = td->compacted_count + td->uncompacted_count;
 
+  // alternate compaction direction to avoid ordering bias
+  // this is done in the Java implementation.
+  const bool reverse = td->compaction_counter % 2 == 1;
+  td->compaction_counter++;
+
+  int (*cmp)(const void*, const void*) = &centroid_compare;
+  if (reverse) {
+    cmp = &centroid_compare_reverse;
+  }
+
   // sort
-  qsort((void*)td->centroids, length, sizeof(centroid), &centroid_compare);
+  qsort((void*)td->centroids, length, sizeof(centroid), cmp);
 
   // Compacting runs two pointers forward through the array,
   // output index, and node we're looking at.
 
   const double total_weight = td->point_count;
   const double compression = td_compression(td);
-  const double Z = 4 * log(total_weight / compression) + 21;
-  const double normalizer =
-    //compression / (4 * log(total_weight / compression) + 24);
-    compression / Z;
+  const double Z = 4 * log(total_weight / compression) + 21; // K3
+  //const double Z = 4 * log(total_weight / compression) + 24; // K2
+  const double normalizer = compression / Z;
 
   double cumulative_sum = 0;
   uint32_t output = 0;
@@ -174,13 +195,14 @@ void td_compact(tdigest* td) {
       // skip it, can't join a node to itself.
       continue;
     }
+
     double proposed_count = td->centroids[output].count + td->centroids[i].count;
     double projected_sum = cumulative_sum + proposed_count;
     double q0 = cumulative_sum / total_weight;
     double q2 = projected_sum / total_weight;
 
-    //double bound = (total_weight * min(q0 *(1 - q0), q2 *(1 - q2)) / normalizer);
-    double bound = total_weight * Z * min(min(q0,1 - q0), min(q2, 1 - q2)) / compression;
+    //double bound = (total_weight * min(q0 * (1.0 - q0), q2 * (1.0 - q2)) / normalizer); // K2
+    double bound = total_weight * Z * min(min(q0, 1.0 - q0), min(q2, 1.0 - q2)) / compression; // K3
 
     if (proposed_count <= bound) {
       td->centroids[output] = weighted_mean(td->centroids[output], td->centroids[i]);
@@ -202,10 +224,18 @@ void td_compact(tdigest* td) {
     fprintf(stderr, "compaction failed: %d + 1 >= %d\n", output, td->capacity);
     exit(-1);
   }
-  //fprintf(stderr, "compaction success: %d to %d\n", length, output + 1);
 
   td->compacted_count = output + 1; // count, not index
   td->uncompacted_count = 0;
+
+  if (reverse) {
+    for (int i = 0; i < td->compacted_count / 2; i++) {
+      int o = td->compacted_count - 1 - i;
+      centroid c1 = td->centroids[i];
+      td->centroids[i] = td->centroids[o];
+      td->centroids[o] = c1;
+    }
+  }
 }
 
 static double __td_interpolate(const double cumulative, const double delta, const double index, centroid c1, centroid c2) {
@@ -226,11 +256,16 @@ static double __td_interpolate(const double cumulative, const double delta, cons
 
   double z1 = index - cumulative - left_unit;
   double z2 = cumulative + delta - index - right_unit;
-  return weighted_avg(c1.mean, z2, c2.mean, z1);
+  double avg = weighted_avg(c1.mean, z2, c2.mean, z1);
+  /*
+  fprintf(stderr, "interpolate centroids:\n (%f %ld) - (%f %ld)\n => z1:%f, z2:%f\n %f\n",
+          c1.mean, c1.count, c2.mean, c2.count, z1, z2, avg);
+  //*/
+  return avg;
 }
 
 double td_percentile(tdigest* td, double percentile) {
-  if (td->point_count == 0 || percentile < 0 || percentile > 1.0) {
+  if (td->point_count == 0 || percentile < 0.0 || percentile > 1.0) {
     return NAN;
   }
   if (!td_is_compact(td)) {
@@ -240,16 +275,16 @@ double td_percentile(tdigest* td, double percentile) {
   const double index = percentile * td->point_count;
 
   // Maybe round out to the min/max.
-  if (index < 1) {
+  if (index < 1.0) {
     return td->min;
   } else if (index > td->point_count - 1) {
     return td->max;
   }
 
-  // Special case extreme edge interpolation.
   const int last = td->compacted_count - 1;
 
   {
+    // Special case extreme edge interpolation.
     centroid min = td->centroids[0];
     centroid max = td->centroids[last];
 
@@ -261,30 +296,34 @@ double td_percentile(tdigest* td, double percentile) {
   }
 
   // Find the centroids that border the index.
-  double cumulative_count = td->centroids[0].count / 2;
+  double cumulative_count = td->centroids[0].count / 2.0;
   for (int i = 0; i < last; i++) {
     centroid c1 = td->centroids[i];
     centroid c2 = td->centroids[i + 1];
 
-    const double delta = (c1.count + c2.count) / 2;
+    const double delta = (c1.count + c2.count) / 2.0;
 
     if (cumulative_count + delta > index) {
-      //fprintf(stderr, "%f + %f > %f\n", cumulative_count, delta, index);
+      //fprintf(stderr, "(%f) %f + %f > %f\n", percentile, cumulative_count, delta, index);
       return __td_interpolate(cumulative_count, delta, index, c1, c2);
     }
     cumulative_count += delta;
   }
 
   centroid lastc = td->centroids[last];
-  double z1 = index - td->point_count - lastc.count / 2;
-  double z2 = lastc.count / 2 - z1;
+  double z1 = index - td->point_count - lastc.count / 2.0;
+  double z2 = lastc.count / 2.0 - z1;
 
   return weighted_avg(lastc.mean, z1, td->max, z2);
 }
 
-void td_dump(tdigest* td) {
+void td_dump(tdigest* td, FILE* out) {
   if (td->centroids[0].count == 0) {
-    fprintf(stderr, "empty tdigest\n");
+    fprintf(out, "empty tdigest\n");
+  }
+
+  if (!td_is_compact(td)) {
+    td_compact(td);
   }
 
   uint64_t count = 0;
@@ -294,10 +333,10 @@ void td_dump(tdigest* td) {
     if (v.count == 0) {
       break;
     }
-    fprintf(stderr, "%d = (%f, %ld)\n", i, v.mean, v.count);
+    fprintf(out, "%d = (%f, %ld)\n", i, v.mean, v.count);
   }
   int64_t delta = td->point_count - count;
   if (delta) {
-    fprintf(stderr, "centroids missing %ld included values\n", delta);
+    fprintf(out, "centroids missing %ld included values\n", delta);
   }
 }

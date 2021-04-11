@@ -8,6 +8,7 @@ void usage(char *arg0) {
   printf("usage: %s\n\n", arg0);
   printf("Create a new filter, not compatible with -l\n");
   printf("  --compression|-c <100> : sets the t-digest compression factor\n");
+  printf("  --dump|-d        : dump the internal storage of the tdigest before computing percentiles\n");
   printf("  --load|-l <file> : tries to load the specified filter\n");
   printf("                     Can be specified any number of times.\n");
   printf("                     Attempting to load incompatible filters\n");
@@ -18,7 +19,7 @@ void usage(char *arg0) {
   printf("  --help|-h|-? : prints this usage message\n");
 }
 
-int run(char* compression, int pc, char* pv[]);
+int run(char* compression, int pc, char* pv[], bool dump);
 
 int main(int argc, char* argv[]) {
   struct option options[] = {
@@ -30,16 +31,19 @@ int main(int argc, char* argv[]) {
     // Filter setup options
     { "compression", required_argument, 0, 'c' }, // p:
 
+    { "dump", required_argument, 0, 'd' }, // d
+
     // Funny options
     { "help", no_argument, 0, 'h' }, // h
 
     { 0, 0, 0, 0 },
   };
 
+  bool dump = false;
   char* compression = 0;
 
   while(true) {
-    const int c = getopt_long(argc, argv, "s:l:c:h", options, 0);
+    const int c = getopt_long(argc, argv, "s:l:c:hd", options, 0);
     if (c == -1) {
       break;
     }
@@ -58,6 +62,9 @@ int main(int argc, char* argv[]) {
      case 'l':
       fprintf(stderr, "load not yet supported\n");
       return 4;
+     case 'd':
+      dump = true;
+      break;
      case '?':
      case 'h':
       usage(argv[0]);
@@ -65,7 +72,7 @@ int main(int argc, char* argv[]) {
     }
   }
 
-  return run(compression, argc - optind, &argv[optind]);
+  return run(compression, argc - optind, &argv[optind], dump);
 }
 
 int __double_cmp(const void* v1, const void* v2) {
@@ -105,7 +112,7 @@ bool read_line(FILE* in, char* buf, const uint32_t length, uint32_t *read) {
   return true;
 }
 
-int run(char* compression, int pc, char* pv[]) {
+int run(char* compression, int pc, char* pv[], bool dump) {
   uint32_t compress = 100;
   if (compression) {
     compress = atol(compression);
@@ -150,13 +157,14 @@ int run(char* compression, int pc, char* pv[]) {
     td_add(td, value);
   }
 
-  // compact & dump
-  //td_compact(td);
-  //td_dump(td);
+  if (dump) {
+    td_dump(td, stderr);
+  }
 
+  const uint64_t count = td_count(td);
   for (int i = 0; i < pc; i++) {
     double p = percentiles[i];
-    fprintf(stdout, "%f = %f\n", p, td_percentile(td, p / 100.0));
+    fprintf(stdout, "%f = %f (%f)\n", p, td_percentile(td, p / 100.0), count * p);
   }
 
   return 0;

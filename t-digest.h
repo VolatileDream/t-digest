@@ -28,4 +28,10 @@ double td_percentile(tdigest* td, double percentile);
 // Dump a readable version of the tdigest out, compacts if necessary.
 void td_dump(tdigest* td, FILE* out);
 
+// Save a machine readable version of the tdigest.
+bool td_save(tdigest* td, FILE* out);
+
+// Load the tdigest from file.
+tdigest* td_load(FILE* in);
+
 #endif /* __T_DIGEST_H__ */

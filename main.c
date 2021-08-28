@@ -19,7 +19,7 @@ void usage(char *arg0) {
   printf("  --help|-h|-? : prints this usage message\n");
 }
 
-int run(char* compression, int pc, char* pv[], bool dump);
+int run(char* compression, int pc, char* pv[], bool dump, char* load, char* save);
 
 int main(int argc, char* argv[]) {
   struct option options[] = {
@@ -42,6 +42,9 @@ int main(int argc, char* argv[]) {
   bool dump = false;
   char* compression = 0;
 
+  char* queued_save = NULL;
+  char* queued_load = NULL;
+
   while(true) {
     const int c = getopt_long(argc, argv, "s:l:c:hd", options, 0);
     if (c == -1) {
@@ -57,11 +60,19 @@ int main(int argc, char* argv[]) {
       compression = optarg;
       break;
      case 's':
-      fprintf(stderr, "--save|-s not yet supported.\n");
-      return 3;
+      if (queued_save) {
+        fprintf(stderr, "--save|-s passed more than once: %s and %s.\n", queued_save, optarg);
+        return 3;
+      }
+      queued_save = optarg;
+      break;
      case 'l':
-      fprintf(stderr, "load not yet supported\n");
-      return 4;
+      if (queued_load) {
+        fprintf(stderr, "--load|-l not yet supported more than once: %s and %s\n", queued_load, optarg);
+        return 4;
+      }
+      queued_load = optarg;
+      break;
      case 'd':
       dump = true;
       break;
@@ -72,7 +83,7 @@ int main(int argc, char* argv[]) {
     }
   }
 
-  return run(compression, argc - optind, &argv[optind], dump);
+  return run(compression, argc - optind, &argv[optind], dump, queued_load, queued_save);
 }
 
 int __double_cmp(const void* v1, const void* v2) {
@@ -112,7 +123,7 @@ bool read_line(FILE* in, char* buf, const uint32_t length, uint32_t *read) {
   return true;
 }
 
-int run(char* compression, int pc, char* pv[], bool dump) {
+int run(char* compression, int pc, char* pv[], bool dump, char* load, char* save) {
   uint32_t compress = 100;
   if (compression) {
     compress = atol(compression);
@@ -137,9 +148,24 @@ int run(char* compression, int pc, char* pv[], bool dump) {
   qsort(percentiles, pc, sizeof(double), &__double_cmp);
 
   tdigest* td = 0;
-  if (!td_alloc(compress, &td)) {
+  if (!load && !td_alloc(compress, &td)) {
     fprintf(stderr, "Failed to allocate t-digest with compression: %d\n", compress);
     return 7;
+  } else if (load) {
+    fprintf(stderr, "loading: %s\n", load);
+    FILE *input = fopen(load, "r");
+    if (!input) {
+      fprintf(stderr, "Failed to open: %s\n", load);
+      return 8;
+    }
+
+    td = td_load(input);
+    fclose(input);
+
+    if (!td) {
+      fprintf(stderr, "Failed to load t-digest from: %s\n", load);
+      return 8;
+    }
   }
 
   char buf[4097] = {0}; // +1 on length to write nul byte at the end.
@@ -165,6 +191,12 @@ int run(char* compression, int pc, char* pv[], bool dump) {
   for (int i = 0; i < pc; i++) {
     double p = percentiles[i];
     fprintf(stdout, "%f = %f (%f)\n", p, td_percentile(td, p / 100.0), count * p);
+  }
+
+  if (save) {
+    FILE *fp = fopen(save, "w");
+    td_save(td, fp);
+    fclose(fp);
   }
 
   return 0;

@@ -1,6 +1,6 @@
 include_rules
 
 : foreach *.c |> !cc |>
-: *.o |> !prog |> tdigest
+: *.o $(TUP_ROOT)/data/serde/libserde.o |> !prog |> tdigest
 
 : tdigest |> !bin |>

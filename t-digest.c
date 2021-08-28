@@ -1,4 +1,5 @@
 #include "t-digest.h"
+#include "data/serde/libserde.h"
 
 #include <math.h>
 #include <stdlib.h>
@@ -11,6 +12,8 @@
 // structure, and how quickly a compaction can be performed.
 
 // Internals.
+
+const uint32_t MAGIC_HEADER = 0x7d163700;
 
 struct centroid_t {
   double mean;
@@ -74,23 +77,26 @@ bool td_add(tdigest* td, double value) {
   return td_addw(td, value, 1);
 }
 
-bool td_alloc(uint32_t compression, tdigest** outptr) {
-  uint32_t nodes = compression << 4;
-  tdigest* ptr = malloc(sizeof(tdigest) + sizeof(centroid) * (nodes + 1));
+static tdigest* td_mk(uint32_t capacity) {
+  tdigest* ptr = malloc(sizeof(tdigest) + sizeof(centroid) * (capacity + 1));
   if (!ptr) {
-    return false;
+    return NULL;
   }
 
-  memset(ptr, 0, sizeof(tdigest) + sizeof(centroid) * (nodes + 1));
+  memset(ptr, 0, sizeof(tdigest) + sizeof(centroid) * (capacity + 1));
 
-  ptr->capacity = nodes;
+  ptr->capacity = capacity;
   ptr->max = -INFINITY;
   ptr->min = INFINITY;
   ptr->centroids = (centroid*)(ptr + 1);
 
-  *outptr = ptr;
+  return ptr;
+}
 
-  return true;
+bool td_alloc(uint32_t compression, tdigest** outptr) {
+  uint32_t nodes = compression << 4;
+  *outptr = td_mk(nodes);
+  return *outptr != NULL;
 }
 
 bool td_free(tdigest* ptr) {
@@ -341,4 +347,91 @@ void td_dump(tdigest* td, FILE* out) {
   if (delta) {
     fprintf(out, "centroids missing %ld included values\n", delta);
   }
+}
+
+bool td_write_centroid(struct centroid_t* c, FILE* out) {
+  bool ok = true;
+  ok = ok && serde_write(out, c->mean);
+  ok = ok && serde_write(out, c->count);
+  return ok;
+}
+
+bool td_read_centroid(struct centroid_t* c, FILE* in) {
+  bool ok = true;
+  ok = ok && serde_read(in, &c->mean);
+  ok = ok && serde_read(in, &c->count);
+  return ok;
+}
+
+bool td_save(tdigest* td, FILE* out) {
+  if (td_needs_compacting(td)) {
+    td_compact(td);
+  }
+
+  serde_start();
+
+  serde_do(write, out, MAGIC_HEADER);
+  serde_do(write, out, td->capacity);
+  serde_do(write, out, td->compacted_count);
+  serde_do(write, out, td->uncompacted_count);
+  serde_do(write, out, td->compaction_counter);
+
+  serde_do(write, out, td->min);
+  serde_do(write, out, td->max);
+  serde_do(write, out, td->point_count);
+
+  const uint32_t count = td->compacted_count + td->uncompacted_count;
+  for (uint32_t i = 0; i < count && !serde_error(); i++) {
+    serde_ok = serde_ok && td_write_centroid(&td->centroids[i], out);
+  }
+
+  serde_return();
+}
+
+tdigest* td_load(FILE* in) {
+  uint32_t header;
+  uint32_t capacity;
+  uint32_t compacted_count;
+  uint32_t uncompacted_count;
+  uint32_t compaction_counter;
+  double min;
+  double max;
+  uint64_t point_count;
+
+  bool ok = true;
+
+  ok = ok && serde_read(in, &header);
+  ok = ok && serde_read(in, &capacity);
+  ok = ok && serde_read(in, &compacted_count);
+  ok = ok && serde_read(in, &uncompacted_count);
+  ok = ok && serde_read(in, &compaction_counter);
+
+  ok = ok && serde_read(in, &min);
+  ok = ok && serde_read(in, &max);
+  ok = ok && serde_read(in, &point_count);
+
+  if (!ok || header != MAGIC_HEADER) {
+    return 0;
+  }
+
+  tdigest* td = td_mk(capacity);
+  td->compacted_count = compacted_count;
+  td->uncompacted_count = uncompacted_count;
+  td->compaction_counter = compaction_counter;
+
+  td->min = min;
+  td->max = max;
+  td->point_count = point_count;
+
+  const uint32_t count = compacted_count + uncompacted_count;
+  for (uint32_t i = 0; i < count && ok; i++) {
+    ok = ok && td_read_centroid(&td->centroids[i], in);
+  }
+
+  if (!ok) {
+    td_free(td);
+    return 0;
+  }
+
+  return td;
 }

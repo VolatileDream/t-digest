@@ -1,6 +1,6 @@
 include_rules
 
 : foreach *.c |> !cc |>
-: *.o |> !prog |> t-digest
+: *.o |> !prog |> tdigest
 
-: t-digest |> !bin |>
+: tdigest |> !bin |>

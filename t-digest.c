@@ -121,6 +121,8 @@ bool td_addw(tdigest* td, double value, uint64_t weight) {
   if (td_needs_compacting(td)) {
     td_compact(td);
   }
+
+  return true;
 }
 
 uint64_t td_count(tdigest* td) {
@@ -186,7 +188,7 @@ void td_compact(tdigest* td) {
   const double compression = td_compression(td);
   const double Z = 4 * log(total_weight / compression) + 21; // K3
   //const double Z = 4 * log(total_weight / compression) + 24; // K2
-  const double normalizer = compression / Z;
+  //const double normalizer = compression / Z;
 
   double cumulative_sum = 0;
   uint32_t output = 0;
@@ -229,7 +231,7 @@ void td_compact(tdigest* td) {
   td->uncompacted_count = 0;
 
   if (reverse) {
-    for (int i = 0; i < td->compacted_count / 2; i++) {
+    for (uint32_t i = 0; i < td->compacted_count / 2; i++) {
       int o = td->compacted_count - 1 - i;
       centroid c1 = td->centroids[i];
       td->centroids[i] = td->centroids[o];
@@ -327,7 +329,7 @@ void td_dump(tdigest* td, FILE* out) {
   }
 
   uint64_t count = 0;
-  for (int i = 0; i < td->capacity; i++) {
+  for (uint32_t i = 0; i < td->capacity; i++) {
     centroid v = td->centroids[i];
     count += v.count;
     if (v.count == 0) {

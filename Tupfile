@@ -1,0 +1,6 @@
+include_rules
+
+: foreach *.c |> !cc |>
+: *.o |> !prog |> t-digest
+
+: t-digest |> !bin |>

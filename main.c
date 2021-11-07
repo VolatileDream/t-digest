@@ -5,7 +5,7 @@
 #include <stdlib.h>
 
 void usage(char *arg0) {
-  printf("usage: %s\n\n", arg0);
+  printf("usage: %s <flags> percentile...\n\n", arg0);
   printf("Create a new filter, not compatible with -l\n");
   printf("  --compression|-c <100> : sets the t-digest compression factor\n");
   printf("  --dump|-d        : dump the internal storage of the tdigest before computing percentiles\n");

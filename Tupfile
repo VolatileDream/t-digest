@@ -1,6 +1,7 @@
 include_rules
 
 : foreach *.c |> !cc |>
+: t-digest.c $(TUP_ROOT)/data/serde/libserde.o |> gcc -shared -fPIC $(FLAGS) -I$(TUP_ROOT) -o %o %f |> t-digest.so
 : *.o $(TUP_ROOT)/data/serde/libserde.o |> !prog |> tdigest
 
 : tdigest |> !bin |>

@@ -78,6 +78,10 @@ bool td_add(tdigest* td, double value) {
 }
 
 static tdigest* td_mk(uint32_t capacity) {
+  if (capacity <= 4) {
+    fprintf(stderr, "Capacity too low: %d\n", capacity);
+    return NULL;
+  }
   tdigest* ptr = malloc(sizeof(tdigest) + sizeof(centroid) * (capacity + 1));
   if (!ptr) {
     return NULL;

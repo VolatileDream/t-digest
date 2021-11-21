@@ -190,7 +190,7 @@ int run(char* compression, int pc, char* pv[], bool dump, char* load, char* save
   const uint64_t count = td_count(td);
   for (int i = 0; i < pc; i++) {
     double p = percentiles[i];
-    fprintf(stdout, "%f = %f (%f)\n", p, td_percentile(td, p / 100.0), count * p);
+    fprintf(stdout, "%f = %f (%f)\n", p, td_percentile(td, p / 100.0), count * p / 100.0);
   }
 
   if (save) {

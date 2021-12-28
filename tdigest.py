@@ -91,6 +91,8 @@ def main(*percentiles):
     print(p, "=", t.percentile(p / 100.0), "(", count * p / 100.0, ")")
 
 
-
-if __name__ == "__main__":
+def m():
   APP.run(main)
+
+
+if __name__ == "__main__": m()

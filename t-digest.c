@@ -208,13 +208,13 @@ void td_compact(tdigest* td) {
       continue;
     }
 
-    double proposed_count = td->centroids[output].count + td->centroids[i].count;
-    double projected_sum = cumulative_sum + proposed_count;
-    double q0 = cumulative_sum / total_weight;
-    double q2 = projected_sum / total_weight;
+    const double proposed_count = td->centroids[output].count + td->centroids[i].count;
+    const double projected_sum = cumulative_sum + proposed_count;
+    const double q0 = cumulative_sum / total_weight;
+    const double q2 = projected_sum / total_weight;
 
     //double bound = (total_weight * min(q0 * (1.0 - q0), q2 * (1.0 - q2)) / normalizer); // K2
-    double bound = total_weight * Z * min(min(q0, 1.0 - q0), min(q2, 1.0 - q2)) / compression; // K3
+    const double bound = total_weight * Z * min(min(q0, 1.0 - q0), min(q2, 1.0 - q2)) / compression; // K3
 
     if (proposed_count <= bound) {
       td->centroids[output] = weighted_mean(td->centroids[output], td->centroids[i]);
